@@ -68,6 +68,8 @@ Adafruit_NeoPixel pixels_speed = Adafruit_NeoPixel(NUMPIXELS_2, ring_speed, NEO_
 Adafruit_NeoPixel pixels_battery = Adafruit_NeoPixel(NUMPIXELS_2, ring_battery, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel pixels_tail = Adafruit_NeoPixel(NUMPIXELS_1, ring_status, NEO_GRB + NEO_KHZ800);
 
+IRrecv irr(ir);
+decode_results results;
 void setup() {
   // put your setup code here, to run once:
   pinMode(frontTrigPin, OUTPUT);
@@ -277,6 +279,16 @@ void trigger_pulse(){
       digitalWrite(frontTrigPin,LOW);
       state = 0;
       break;
+  }
+}
+
+void decode(){
+  if (irr.decode(&results)){
+    if (results.value == "C573E684" && run){
+      run = false;
+    } else if (results.value == "C573E684" && !run){
+      run = true;
+    }
   }
 }
 
