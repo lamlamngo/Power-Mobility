@@ -74,7 +74,7 @@ decode_results results;
 
 int number_of_inputs = 0;
 void setup() {
-  // put your setup code here, to run once:
+  // initialize inputs
   pinMode(frontTrigPin, OUTPUT);
   pinMode(frontEchoPin, INPUT);
 
@@ -119,6 +119,7 @@ void loop() {
     leftMotor.writeMicroseconds(1510);
     rightMotor.writeMicroseconds(1510);
 
+    //move forward
     if (forward != -1 && digitalRead(forward) == LOW){
       speed = forward_speed[speed_profile][0];
 
@@ -144,6 +145,7 @@ void loop() {
       reset_tail_light();
     }
 
+    //move backward
     if (backward != -1 && digitalRead(backward) == LOW){
       speed = backward_speed[speed_profile][0];
 
@@ -166,6 +168,7 @@ void loop() {
       reset_tail_light();
     }
 
+    //move left
     if (left != -1 && digitalRead(right) == LOW){
       float speedL = forward_speed[speed_profile][0];
       float speedR = backward_speed[speed_profile][0];
@@ -196,6 +199,7 @@ void loop() {
       reset_tail_light();
     }
 
+    //move right
     if (right != -1 && digitalRead(left) == LOW){
       float speedL = backward_speed[speed_profile][0];
       float speedR = forward_speed[speed_profile][0];
@@ -229,6 +233,7 @@ void loop() {
   }
 }
 
+//Read from serial and setup
 void setup_stage(){
   if (Serial.avialable() > 0){
     String message = Serial.readString();
@@ -270,6 +275,7 @@ void timerIsr(){
   trigger_pulse();
 }
 
+//incrementally light up the tail light neopixel
 void proportial_light(int currentspeed, int max, int direction){
   int to_lit = (currentspeed/max)*NUMPIXELS_1;
   if (direction == 0){
@@ -280,6 +286,7 @@ void proportial_light(int currentspeed, int max, int direction){
   pixels_tail.show();
 }
 
+//turn off neopixel
 void reset_tail_light(){
   for (int i = 0; i < NUMPIXELS_1; i++){
     pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
@@ -287,6 +294,7 @@ void reset_tail_light(){
   pixels_tail.show();
 }
 
+//blink red
 void tail_blink(int state){
   if (state == 0){
     for (int i = 0; i < NUMPIXELS_1; i++){
@@ -327,6 +335,7 @@ void trigger_pulse(){
   }
 }
 
+//decode upcoming signal from IR sensors
 void decode(){
   if (irr.decode(&results)){
     if (results.value == "C573E684" && run){
