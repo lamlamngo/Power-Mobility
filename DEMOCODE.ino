@@ -1,35 +1,39 @@
+//Author: Lam Ngo
 
 #include <TimerOne.h>
 #include <Servo.h>
-//#include <IRremote.h>
+#include <IRremote.h>
 #include <Adafruit_NeoPixel.h>
-#ifdef __AVR__
-  #include <avr/power.h>
-#endif
 
+//define pins
 #define frontTrigPin 4
 #define frontEchoPin 2
-
 #define backTrigPin 5
 #define backEchoPin 3
 
-#define buzzer 53
+#define buzzer 24
 
-//#define ir 18
+//define four installed sockets
+#define first 11
+#define second 12
+#define third 13
+#define fourth 22
 
-#define backward 11
-#define forward 12
-#define right 13
-
+//Statiscal LEDs
 #define ring_speed 8
-#define ring_battery 12 
-#define ring_status 52
+#define ring_battery 9
+#define ring_status 10
 
+//IR sensors
 #define frontAnalog A1
 #define backAnalog A2
 
-#define NUMPIXELS_1 8
-#define NUMPIXELS_2 10
+#define battery_level A2
+#define ir 18
+
+//additional constants
+#define NUMPIXELS_1 16
+#define NUMPIXELS_2 24
 #define echo_int 0
 
 #define TIMER_US 50
@@ -44,138 +48,174 @@ float speed;
 boolean stop = true;
 float led;
 int max = 40;
+int speedprofile = -1;
+
+int[][] forward_speed = {{1540,1580},{1540,1600},{1530,1650}}
+int[][] backward_speed = {{1460,1420},{1460,1400},{1460,1350}}
+
+int forward;
+int backward;
+int left;
+int right;
+
+bool run = true;
 
 Servo leftMotor;
 Servo rightMotor;
 
-Adafruit_NeoPixel pixels_1 = Adafruit_NeoPixel(16, 8, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels_speed = Adafruit_NeoPixel(NUMPIXELS_2, ring_speed, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels_battery = Adafruit_NeoPixel(NUMPIXELS_2, ring_battery, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels_tail = Adafruit_NeoPixel(NUMPIXELS_1, ring_status, NEO_GRB + NEO_KHZ800);
 
 void setup() {
   // put your setup code here, to run once:
   pinMode(frontTrigPin, OUTPUT);
   pinMode(frontEchoPin, INPUT);
 
+  pinMode(backTrigPin, OUTPUT);
+  pinMode(backEchoPin, INPUT);
+
   Timer1.initialize(TIMER_US);
   Timer1.attachInterrupt(timerIsr);
   attachInterrupt(echo_int, echo_interrupt, CHANGE);
 
+  attachInterrupt(ir, decode);
+
   leftMotor.attach(6);
+  leftMotor.write(90);
   rightMotor.attach(7);
+  rightMotor.write(90);
 
-  pinMode(forward,INPUT_PULLUP);
-  pinMode(backward, INPUT_PULLUP);
-  pinMode(right, INPUT_PULLUP);
+  pixels_speed.begin();
+  pixels_speed.show();
 
-  pixels_1.begin();
-  pixels_1.show();
+  pixels_battery.begin();
+  pixels_battery.show();
+
+  pixels_tail.begin();
+  pixels_tail.show();
 
   Serial.begin(9600);
+
+  setup_stage();
 }
 
 void loop() {
-//
-  leftMotor.writeMicroseconds(1510);
-  rightMotor.writeMicroseconds(1510);
 
-  if (digitalRead(forward) == LOW){
+  if (run){
+    //neutral state
+    setup_stage();
+    leftMotor.writeMicroseconds(1510);
+    rightMotor.writeMicroseconds(1510);
 
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(0,0,255));
-        pixels_1.show();
-    }
-    speed = 1560;
-    while (digitalRead(forward) == LOW){
-      if (speed >= 1600){
-        speed = 1600;
-      }
-      leftMotor.writeMicroseconds(speed+2);
-      rightMotor.writeMicroseconds(speed);
-      speed = speed + 0.0005;
-    }
+    if (digitalRead(forward) == LOW){
+      speed = forward_speed[speed_profile][0];
 
-    
-    while (speed > 1525){
-      leftMotor.writeMicroseconds(speed);
-      rightMotor.writeMicroseconds(speed);
-      speed = speed - 0.005;
-    }
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(0,0,0));
-        pixels_1.show();
-    }
-    pixels_1.show();
-  }
+      //slowly accelarating
+      while (digitalRead(forward) == LOW){
+        if (speed >= forward_speed[speed_profile][1]){
+          speed = forward_speed[speed_profile][1];
+        }
+        leftMotor.writeMicroseconds(speed+2);
+        rightMotor.writeMicroseconds(speed);
+        speed = speed + 0.0005;
 
-  if (digitalRead(backward) == LOW){
-    speed = 1440;
-
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(255,0,0));
-        pixels_1.show();
-    }
-//    
-    while (digitalRead(backward) == LOW && !stop){
-      if (speed <= 1380){
-        speed = 1380;
-      }
-      leftMotor.writeMicroseconds(speed);
-      rightMotor.writeMicroseconds(speed);
-      speed = speed - 0.0005;
-
-    }
-
-    while (speed < 1475){
-      leftMotor.writeMicroseconds(speed);
-      rightMotor.writeMicroseconds(speed);
-      speed = speed + 0.001;
-    } 
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(0,0,0));
-        pixels_1.show();
-    }
-    pixels_1.show();
-  }
-
-  if (digitalRead(right) == LOW){
-
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(0,255,0));
-        pixels_1.show();
-    }
-    float speedL = 1560;
-    float speedR = 1440;
-
-    while (digitalRead(right) == LOW && !stop){
-      if (speedL >= 1600){
-        speedL = 1600; 
+        proportial_light(speed, forward_speed[speed_profile][1] - forward_speed[speed_profile][0])
       }
 
-      if (speedR <= 1400){
-        speedR = 1400;
+      //slow decelerating
+      while (speed > 1525){
+        leftMotor.writeMicroseconds(speed);
+        rightMotor.writeMicroseconds(speed);
+        speed = speed - 0.005;
+      }
+    }
+
+    if (digitalRead(backward) == LOW){
+      speed = backward_speed[speed_profile][0];
+
+      while (digitalRead(backward) == LOW && !stop){
+        if (speed <= backward_speed[speed_profile][1]){
+          speed = backward_speed[speed_profile][1];
+        }
+        leftMotor.writeMicroseconds(speed);
+        rightMotor.writeMicroseconds(speed);
+        speed = speed - 0.0005;
+        proportial_light(speed, backward_speed[speed_profile][0] - backward_speed[speed_profile][1])
       }
 
-      leftMotor.writeMicroseconds(speedL);
-      rightMotor.writeMicroseconds(speedR);
-      speedL = speedL + 0.002;
-      speedR = speedR - 0.002;
+      while (speed < 1475){
+        leftMotor.writeMicroseconds(speed);
+        rightMotor.writeMicroseconds(speed);
+        speed = speed + 0.001;
+      }
     }
-    
-    while (speedL > 1525 && speedR < 1475){
-      leftMotor.writeMicroseconds(speedL);
-      rightMotor.writeMicroseconds(speedR);
-      speedL = speedL - 0.001;
-      speedR = speedR + 0.001;      
+
+    if (digitalRead(right) == LOW){
+      float speedL = forward_speed[speed_profile][0];
+      float speedR = backward_speed[speed_profile][0];
+
+      while (digitalRead(right) == LOW && !stop){
+        if (speedL >= forward_speed[speed_profile][1]){
+          speedL = forward_speed[speed_profile][1];
+        }
+
+        if (speedR <= backward_speed[speed_profile][1]){
+          speedR = backward_speed[speed_profile][1];
+        }
+
+        leftMotor.writeMicroseconds(speedL);
+        rightMotor.writeMicroseconds(speedR);
+        speedL = speedL + 0.002;
+        speedR = speedR - 0.002;
+        proportial_light(speedL, forward_speed[speed_profile][1] - forward_speed[speed_profile][0])
+      }
+
+      while (speedL > 1525 && speedR < 1475){
+        leftMotor.writeMicroseconds(speedL);
+        rightMotor.writeMicroseconds(speedR);
+        speedL = speedL - 0.001;
+        speedR = speedR + 0.001;
+      }
     }
-    for( int i = 0; i<16; i++){
-        pixels_1.setPixelColor(i, pixels_1.Color(0,0,0));
-        pixels_1.show();
+
+    if (digitalRead(left) == LOW){
+      float speedL = backward_speed[speed_profile][0];
+      float speedR = forward_speed[speed_profile][0];
+
+      while (digitalRead(right) == LOW && !stop){
+        if (speedR >= forward_speed[speed_profile][1]){
+          speedR = forward_speed[speed_profile][1];
+        }
+
+        if (speedL <= backward_speed[speed_profile][1]){
+          speedL = backward_speed[speed_profile][1];
+        }
+
+        leftMotor.writeMicroseconds(speedL);
+        rightMotor.writeMicroseconds(speedR);
+        speedR = speedR + 0.002;
+        speedL = speedL - 0.002;
+
+        proportial_light(speedL, backward_speed[speed_profile][0] - backward_speed[speed_profile][1])
+      }
+
+      while (speedR > 1525 && speedL < 1475){
+        leftMotor.writeMicroseconds(speedL);
+        rightMotor.writeMicroseconds(speedR);
+        speedR = speedR - 0.001;
+        speedL = speedL + 0.001;
+      }
     }
-    pixels_1.show();
   }
 }
 
 void timerIsr(){
   trigger_pulse();
+}
+
+void proportial_light(int max){
+
 }
 
 void trigger_pulse(){
@@ -188,7 +228,7 @@ void trigger_pulse(){
 
   switch (state) {
     case 0: break;
-    case 1: 
+    case 1:
       digitalWrite(frontTrigPin,LOW);
       delayMicroseconds(5);
       digitalWrite(frontTrigPin, HIGH);
@@ -199,7 +239,7 @@ void trigger_pulse(){
       digitalWrite(frontTrigPin,LOW);
       state = 0;
       break;
-  }  
+  }
 }
 
 void echo_interrupt(){
@@ -231,4 +271,3 @@ void echo_interrupt(){
       break;
   }
 }
-
