@@ -19,6 +19,7 @@
 #define third 13
 #define fourth 22
 
+int[] input_list = {11,12,13,22};
 //Statiscal LEDs
 #define ring_speed 8
 #define ring_battery 9
@@ -53,10 +54,10 @@ int speedprofile = -1;
 int[][] forward_speed = {{1540,1580},{1540,1600},{1530,1650}}
 int[][] backward_speed = {{1460,1420},{1460,1400},{1460,1350}}
 
-int forward;
-int backward;
-int left;
-int right;
+int forward = -1;
+int backward = -1;
+int left = -1;
+int right = -1;
 
 bool run = true;
 int light_state = 0;
@@ -70,6 +71,8 @@ Adafruit_NeoPixel pixels_tail = Adafruit_NeoPixel(NUMPIXELS_1, ring_status, NEO_
 
 IRrecv irr(ir);
 decode_results results;
+
+int number_of_inputs = 0;
 void setup() {
   // put your setup code here, to run once:
   pinMode(frontTrigPin, OUTPUT);
@@ -77,6 +80,11 @@ void setup() {
 
   pinMode(backTrigPin, OUTPUT);
   pinMode(backEchoPin, INPUT);
+
+  pinMode(first,INPUT_PULLUP);
+  pinMode(second,INPUT_PULLUP);
+  pinMode(third,INPUT_PULLUP);
+  pinMode(fourth,INPUT_PULLUP);
 
   Timer1.initialize(TIMER_US);
   Timer1.attachInterrupt(timerIsr);
@@ -111,7 +119,7 @@ void loop() {
     leftMotor.writeMicroseconds(1510);
     rightMotor.writeMicroseconds(1510);
 
-    if (digitalRead(forward) == LOW){
+    if (forward != -1 && digitalRead(forward) == LOW){
       speed = forward_speed[speed_profile][0];
 
       //slowly accelarating
@@ -136,7 +144,7 @@ void loop() {
       reset_tail_light();
     }
 
-    if (digitalRead(backward) == LOW){
+    if (backward != -1 && digitalRead(backward) == LOW){
       speed = backward_speed[speed_profile][0];
 
       while (digitalRead(backward) == LOW && !stop){
@@ -158,7 +166,7 @@ void loop() {
       reset_tail_light();
     }
 
-    if (digitalRead(right) == LOW){
+    if (left != -1 && digitalRead(right) == LOW){
       float speedL = forward_speed[speed_profile][0];
       float speedR = backward_speed[speed_profile][0];
 
@@ -188,7 +196,7 @@ void loop() {
       reset_tail_light();
     }
 
-    if (digitalRead(left) == LOW){
+    if (right != -1 && digitalRead(left) == LOW){
       float speedL = backward_speed[speed_profile][0];
       float speedR = forward_speed[speed_profile][0];
 
@@ -217,6 +225,43 @@ void loop() {
       }
 
       reset_tail_light();
+    }
+  }
+}
+
+void setup_stage(){
+  if (Serial.avialable() > 0){
+    String message = Serial.readString();
+
+    String v = message;
+    int count = 1;
+
+    while (v.indexOf("|") != -1){
+      if (count == 1){
+        number_of_inputs = int(v.substring(0,v.indexOf("|")));
+      } else if (count == 2){
+        speed_profile =  int(v.substring(0,v.indexOf("|"))) - 1;
+      } else if (count == 3){
+        r =  int(v.substring(0,v.indexOf("|")));
+        if (r == "On"){
+          safemode = true;
+        } else {
+          safemode = false;
+        }
+      } else if (count == 4){
+        String a = v.substring(0,v.indexOf("|"));
+        for (int i = 0; i < number_of_inputs; i++){
+          if (a.charAt(i) == 'F'){
+            forward = input_list[i];
+          }else if (a.charAt(i) == "B"){
+            backward = input_list[i];
+          } else if (a.charAt(i) == "L"){
+            left = input_list[i];
+          } else if (a.charAt(i) == "R"){
+            right = input_list[i];
+          }
+        }
+      }
     }
   }
 }
