@@ -120,7 +120,7 @@ void loop() {
         rightMotor.writeMicroseconds(speed);
         speed = speed + 0.0005;
 
-        proportial_light(speed, forward_speed[speed_profile][1] - forward_speed[speed_profile][0])
+        proportial_light(speed, forward_speed[speed_profile][1] - forward_speed[speed_profile][0], 0)
       }
 
       //slow decelerating
@@ -141,7 +141,7 @@ void loop() {
         leftMotor.writeMicroseconds(speed);
         rightMotor.writeMicroseconds(speed);
         speed = speed - 0.0005;
-        proportial_light(speed, backward_speed[speed_profile][0] - backward_speed[speed_profile][1])
+        proportial_light(speed, backward_speed[speed_profile][0] - backward_speed[speed_profile][1], 1)
       }
 
       while (speed < 1475){
@@ -168,7 +168,7 @@ void loop() {
         rightMotor.writeMicroseconds(speedR);
         speedL = speedL + 0.002;
         speedR = speedR - 0.002;
-        proportial_light(speedL, forward_speed[speed_profile][1] - forward_speed[speed_profile][0])
+        proportial_light(speedL, forward_speed[speed_profile][1] - forward_speed[speed_profile][0], 0)
       }
 
       while (speedL > 1525 && speedR < 1475){
@@ -197,7 +197,7 @@ void loop() {
         speedR = speedR + 0.002;
         speedL = speedL - 0.002;
 
-        proportial_light(speedL, backward_speed[speed_profile][0] - backward_speed[speed_profile][1])
+        proportial_light(speedL, backward_speed[speed_profile][0] - backward_speed[speed_profile][1], 1)
       }
 
       while (speedR > 1525 && speedL < 1475){
@@ -214,8 +214,13 @@ void timerIsr(){
   trigger_pulse();
 }
 
-void proportial_light(int max){
-
+void proportial_light(int currentspeed, int max, int direction){
+  int to_lit = (currentspeed/max)*NUMPIXELS_1;
+  if (direction == 0){
+      pixels_tail.setPixelColor(to_lit, pixels_tail.Color(0,150,0));
+  } else if (direction == 1){
+      pixels_tail.setPixelColor(to_lit, pixels_tail.Color(150,0,0));
+  }
 }
 
 void trigger_pulse(){
