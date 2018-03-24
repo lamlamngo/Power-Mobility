@@ -19,7 +19,7 @@
 #define third 13
 #define fourth 22
 
-int[] input_list = {11,12,13,22};
+int input_list[] = {11,12,13,22};
 //Statiscal LEDs
 #define ring_speed 8
 #define ring_battery 9
@@ -51,8 +51,8 @@ float led;
 int max = 40;
 int speedprofile = -1;
 
-int[][] forward_speed = {{1540,1580},{1540,1600},{1530,1650}}
-int[][] backward_speed = {{1460,1420},{1460,1400},{1460,1350}}
+int forward_speed[][] = {{1540,1580},{1540,1600},{1530,1650}}
+int backward_speed[][] = {{1460,1420},{1460,1400},{1460,1350}}
 
 int forward = -1;
 int backward = -1;
@@ -60,6 +60,7 @@ int left = -1;
 int right = -1;
 
 bool run = true;
+boolean safemode = true;
 int light_state = 0;
 
 Servo leftMotor;
@@ -109,10 +110,14 @@ void setup() {
   Serial.begin(9600);
 
   setup_stage();
+   time_t t = now();
 }
 
 void loop() {
-
+  if (minute(now()) - minute(t) >= 10){
+    battery_light(analogRead(battery_level));
+    t = now();
+  }
   if (run){
     //neutral state
     setup_stage();
@@ -245,7 +250,15 @@ void setup_stage(){
       if (count == 1){
         number_of_inputs = int(v.substring(0,v.indexOf("|")));
       } else if (count == 2){
-        speed_profile =  int(v.substring(0,v.indexOf("|"))) - 1;
+        speed_profile =  int(v.substring(0,v.indexOf("|")));
+        if (speed_profile == 1){
+          speed_profile = 0;
+        } else if (speed_profile == 2){
+          speed_profile = 1;
+        } else{
+          speed_profile = 2;
+        }
+        speed_light(speed_profile);
       } else if (count == 3){
         r =  int(v.substring(0,v.indexOf("|")));
         if (r == "On"){
@@ -292,6 +305,40 @@ void reset_tail_light(){
     pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
   }
   pixels_tail.show();
+}
+
+//light up speed light
+void speed_light(int speed_profile){
+  if (speed_profile == 0){
+    int color[] = {0,0,255};
+  } else if (speed_profile == 1){
+    int color[] = {0,150,0};
+  } else if (speed_profile == 2) {
+    int color[] = {238,130,238}
+  }
+  for (int i = 0; i < NUMPIXELS_2; i++){
+    pixels_speed.setPixelColor(i, pixels_speed.Color(color[0],color[1],color[2]));
+  }
+  pixels_speed.show();
+}
+
+void battery_light(int batterylevel){
+  if (batterylevel > 4.47){
+    for (int i = 0; i < NUMPIXELS_2; i++){
+      pixels_battery.setPixelColor(i, pixels_speed.Color(0,150,0));
+    }
+    pixels_battery.show();
+  } else if (batterylevel > 4.32 and batterylevel <= 4.47){
+    for (int i = 0; i < NUMPIXELS_2; i++){
+      pixels_battery.setPixelColor(i, pixels_speed.Color(255,255,0));
+    }
+    pixels_battery.show();
+  } else if (batterylevel <= 4.32){
+    for (int i = 0; i < NUMPIXELS_2; i++){
+      pixels_battery.setPixelColor(i, pixels_speed.Color(150,0,0));
+    }
+    pixels_battery.show();
+  }
 }
 
 //blink red
@@ -356,28 +403,30 @@ void echo_interrupt(){
       echo_end = micros();
       echo_duration = echo_end - echo_start;
       Serial.println(echo_duration/58);
-      if (echo_duration/58 < 80  && echo_duration/58 != 0) {
-        //distance in cm
-        if (echo_duration/58 < 50 && echo_duration/58 != 0){
-          // distance < 50 and stop the device
-          tone(buzzer,1000);
-          if (light_state == 0){
-            light_state = 1;
-            tail_blink(light_state);
-          } else{
-            light_state = 0;
-            tail_blink(light_state);
+      if (safemode){
+        if (echo_duration/58 < 80  && echo_duration/58 != 0) {
+          //distance in cm
+          if (echo_duration/58 < 50 && echo_duration/58 != 0){
+            // distance < 50 and stop the device
+            tone(buzzer,1000);
+            if (light_state == 0){
+              light_state = 1;
+              tail_blink(light_state);
+            } else{
+              light_state = 0;
+              tail_blink(light_state);
+            }
+            stop = true;
+          }else{
+            // < 80 sound the alarm to alert
+            tone(buzzer,500);
+            stop = false;
           }
-          stop = true;
-        }else{
-          // < 80 sound the alarm to alert
-          tone(buzzer,500);
+        } else{
+          //do nothing
+          noTone(buzzer);
           stop = false;
         }
-      } else{
-        //do nothing
-        noTone(buzzer);
-        stop = false;
       }
       break;
   }
