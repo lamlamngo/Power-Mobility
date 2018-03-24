@@ -59,6 +59,7 @@ int left;
 int right;
 
 bool run = true;
+int light_state = 0;
 
 Servo leftMotor;
 Servo rightMotor;
@@ -129,6 +130,8 @@ void loop() {
         rightMotor.writeMicroseconds(speed);
         speed = speed - 0.005;
       }
+
+      reset_tail_light();
     }
 
     if (digitalRead(backward) == LOW){
@@ -149,6 +152,8 @@ void loop() {
         rightMotor.writeMicroseconds(speed);
         speed = speed + 0.001;
       }
+
+      reset_tail_light();
     }
 
     if (digitalRead(right) == LOW){
@@ -177,6 +182,8 @@ void loop() {
         speedL = speedL - 0.001;
         speedR = speedR + 0.001;
       }
+
+      reset_tail_light();
     }
 
     if (digitalRead(left) == LOW){
@@ -206,6 +213,8 @@ void loop() {
         speedR = speedR - 0.001;
         speedL = speedL + 0.001;
       }
+
+      reset_tail_light();
     }
   }
 }
@@ -220,6 +229,30 @@ void proportial_light(int currentspeed, int max, int direction){
       pixels_tail.setPixelColor(to_lit, pixels_tail.Color(0,150,0));
   } else if (direction == 1){
       pixels_tail.setPixelColor(to_lit, pixels_tail.Color(150,0,0));
+  }
+  pixels_tail.show();
+}
+
+void reset_tail_light(){
+  for (int i = 0; i < NUMPIXELS_1; i++){
+    pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
+  }
+  pixels_tail.show();
+}
+
+void tail_blink(int state){
+  if (state == 0){
+    for (int i = 0; i < NUMPIXELS_1; i++){
+      pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
+    }
+    pixels_tail.show();
+    delay(500);
+  } else{
+    for (int i = 0; i < NUMPIXELS_1; i++){
+      pixels_tail.setPixelColor(i, pixels_tail.Color(150,0,0));
+    }
+    pixels_tail.show();
+    delay(500);
   }
 }
 
@@ -262,6 +295,13 @@ void echo_interrupt(){
         if (echo_duration/58 < 50 && echo_duration/58 != 0){
           // distance < 50 and stop the device
           tone(buzzer,1000);
+          if (light_state == 0){
+            light_state = 1;
+            tail_blink(light_state);
+          } else{
+            light_state = 0;
+            tail_blink(light_state);
+          }
           stop = true;
         }else{
           // < 80 sound the alarm to alert
