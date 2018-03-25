@@ -19,6 +19,11 @@
 #define third 13
 #define fourth 22
 
+#define firstPresent 23
+#define secondPresent 24
+#define thirdPresent 25
+#define fourthPresent 26
+
 int input_list[] = {11,12,13,22};
 //Statiscal LEDs
 #define ring_speed 8
@@ -114,6 +119,7 @@ void setup() {
 }
 
 void loop() {
+  //update battery level every 10 minutes
   if (minute(now()) - minute(t) >= 10){
     battery_light(analogRead(battery_level));
     t = now();
@@ -125,7 +131,7 @@ void loop() {
     rightMotor.writeMicroseconds(1510);
 
     //move forward
-    if (forward != -1 && digitalRead(forward) == LOW){
+    if (failsafe() && forward != -1 && digitalRead(forward) == LOW){
       speed = forward_speed[speed_profile][0];
 
       //slowly accelarating
@@ -151,7 +157,7 @@ void loop() {
     }
 
     //move backward
-    if (backward != -1 && digitalRead(backward) == LOW){
+    if (failsafe() && backward != -1 && digitalRead(backward) == LOW){
       speed = backward_speed[speed_profile][0];
 
       while (digitalRead(backward) == LOW && !stop){
@@ -174,7 +180,7 @@ void loop() {
     }
 
     //move left
-    if (left != -1 && digitalRead(right) == LOW){
+    if (failsafe() && left != -1 && digitalRead(right) == LOW){
       float speedL = forward_speed[speed_profile][0];
       float speedR = backward_speed[speed_profile][0];
 
@@ -205,7 +211,7 @@ void loop() {
     }
 
     //move right
-    if (right != -1 && digitalRead(left) == LOW){
+    if (failsafe() && right != -1 && digitalRead(left) == LOW){
       float speedL = backward_speed[speed_profile][0];
       float speedR = forward_speed[speed_profile][0];
 
@@ -236,6 +242,27 @@ void loop() {
       reset_tail_light();
     }
   }
+}
+
+boolean failsafe(){
+  if (leftMotor.read() == 0){
+    Serial.write("Not Ready");
+    return false;
+  }
+
+  if (rightMotor.read() == 0){
+    Serial.write("Not Ready");
+    return false;
+  }
+
+  if (digitalRead(firstPresent) == HIGH || digitalRead(secondPresent) == HIGH
+   || digitalRead(thirdPresent) == HIGH || digitalRead(fourthPresent) == LOW){
+     Serial.write("Not Ready");
+     return false;
+   }
+
+   Serial.write("Ready");
+   return true;
 }
 
 //Read from serial and setup
@@ -402,7 +429,10 @@ void echo_interrupt(){
     case LOW:
       echo_end = micros();
       echo_duration = echo_end - echo_start;
-      Serial.println(echo_duration/58);
+      if (echo_duration/58 == 0){
+        stop = true;
+        Serial.write("Not Ready");
+      }
       if (safemode){
         if (echo_duration/58 < 80  && echo_duration/58 != 0) {
           //distance in cm
