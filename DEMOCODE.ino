@@ -1,388 +1,709 @@
-//Author: Lam Ngo
 
 #include <TimerOne.h>
 #include <Servo.h>
-#include <IRremote.h>
-#include <Adafruit_NeoPixel.h>
+#include <SPI.h>
+#include "Adafruit_BLE_UART.h"
 
-//define pins
-#define frontTrigPin 4
+#define frontTrigPin 7
 #define frontEchoPin 2
-#define backTrigPin 5
+
+#define backTrigPin 19
 #define backEchoPin 3
 
-#define buzzer 24
+#define buzzer 49
 
-//define four installed sockets
-#define first 11
-#define second 12
-#define third 13
-#define fourth 22
+int val = 0;
 
-#define firstPresent 23
-#define secondPresent 24
-#define thirdPresent 25
-#define fourthPresent 26
+int backward = 8;
+int forward = 9;
+int right = 10;
+int left = 12;
 
-int input_list[] = {11,12,13,22};
-//Statiscal LEDs
-#define ring_speed 8
-#define ring_battery 9
-#define ring_status 10
+int timer_start = 0;
+int timer_end = 0;
+int timer[13];
+bool _delay = false;
+bool _timeout = false;
+int safemode_distance = 80;
 
-//IR sensors
-#define frontAnalog A1
-#define backAnalog A2
+#define battery A8
 
-#define battery_level A2
-#define ir 18
-
-//additional constants
-#define NUMPIXELS_1 16
-#define NUMPIXELS_2 24
 #define echo_int 0
 
 #define TIMER_US 50
 #define TICK_COUNTS 4000
+#define ADAFRUITBLE_REQ 53
+#define ADAFRUITBLE_RDY 21     // This should be an interrupt pin, on Uno thats #2 or #3
+#define ADAFRUITBLE_RST 38
+
+Adafruit_BLE_UART BTLEserial = Adafruit_BLE_UART(ADAFRUITBLE_REQ, ADAFRUITBLE_RDY, ADAFRUITBLE_RST);
 
 volatile long echo_start = 0;
 volatile long echo_end = 0;
 volatile long echo_duration = 0;
 volatile int trigger_time_count = 0;
 
-float speed;
-boolean stop = true;
+volatile long echo_start1 = 0;
+volatile long echo_end1 = 0;
+volatile long echo_duration1 = 0;
+
+int mode = 0;
+
+int inputs[13];
+
+float speed_F = 1380;
+float speed_B = 1600;
+boolean stop = false;
 float led;
 int max = 40;
-int speedprofile = -1;
 
-int forward_speed[][] = {{1540,1580},{1540,1600},{1530,1650}}
-int backward_speed[][] = {{1460,1420},{1460,1400},{1460,1350}}
-
-int forward = -1;
-int backward = -1;
-int left = -1;
-int right = -1;
-
-bool run = true;
-boolean safemode = true;
-int light_state = 0;
-
+boolean start = true;
 Servo leftMotor;
 Servo rightMotor;
+boolean safemode = false;
 
-Adafruit_NeoPixel pixels_speed = Adafruit_NeoPixel(NUMPIXELS_2, ring_speed, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel pixels_battery = Adafruit_NeoPixel(NUMPIXELS_2, ring_battery, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel pixels_tail = Adafruit_NeoPixel(NUMPIXELS_1, ring_status, NEO_GRB + NEO_KHZ800);
+String input = "";
 
-IRrecv irr(ir);
-decode_results results;
-
-int number_of_inputs = 0;
 void setup() {
-  // initialize inputs
+  // put your setup code here, to run once:
   pinMode(frontTrigPin, OUTPUT);
   pinMode(frontEchoPin, INPUT);
 
   pinMode(backTrigPin, OUTPUT);
   pinMode(backEchoPin, INPUT);
 
-  pinMode(first,INPUT_PULLUP);
-  pinMode(second,INPUT_PULLUP);
-  pinMode(third,INPUT_PULLUP);
-  pinMode(fourth,INPUT_PULLUP);
-
   Timer1.initialize(TIMER_US);
   Timer1.attachInterrupt(timerIsr);
   attachInterrupt(echo_int, echo_interrupt, CHANGE);
 
-  attachInterrupt(ir, decode);
-
   leftMotor.attach(6);
-  leftMotor.write(90);
-  rightMotor.attach(7);
-  rightMotor.write(90);
+  rightMotor.attach(4);
 
-  pixels_speed.begin();
-  pixels_speed.show();
+  pinMode(forward,INPUT_PULLUP);
+  pinMode(backward, INPUT_PULLUP);
+  pinMode(right, INPUT_PULLUP);
+  pinMode(left, INPUT_PULLUP);
 
-  pixels_battery.begin();
-  pixels_battery.show();
-
-  pixels_tail.begin();
-  pixels_tail.show();
+  pinMode(39, OUTPUT);
+  pinMode(20, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(20), blink, CHANGE);
 
   Serial.begin(9600);
+  Serial.println(F("Power Mobility"));
 
-  setup_stage();
-   time_t t = now();
+  BTLEserial.setDeviceName("Lam"); /* 7 characters max! */
+
+  BTLEserial.begin();
+
+  for (int i = 0; i < 13; i++){
+    inputs[i] = 0;
+  }
+
+  inputs[forward] = 1;
+  inputs[backward] = 1;
+  inputs[left] = 1;
+  inputs[right] = 1;
+
+  for (int i = 0; i < 13; i++){
+    timer[i] = 0;
+  }
+
+  timer[forward] = 0;
+  timer[backward] = 0;
+  timer[left] = 0;
+  timer[right] = 0;
 }
 
+aci_evt_opcode_t laststatus = ACI_EVT_DISCONNECTED;
+char inData[50];
+int index = 0;
+float speed;
 void loop() {
-  //update battery level every 10 minutes
-  if (minute(now()) - minute(t) >= 10){
-    battery_light(analogRead(battery_level));
-    t = now();
+  if (start){
+    digitalWrite(39,HIGH);
+  } else{
+    digitalWrite(39,LOW);
   }
-  if (run){
-    //neutral state
-    setup_stage();
+
+  BTLEserial.pollACI();
+
+  // Ask what is our current status
+  aci_evt_opcode_t status = BTLEserial.getState();
+  // If the status changed....
+  if (status != laststatus) {
+    // print it out!
+    if (status == ACI_EVT_DEVICE_STARTED) {
+        Serial.println(F("* Advertising started"));
+    }
+    if (status == ACI_EVT_CONNECTED) {
+        Serial.println(F("* Connected!"));
+    }
+    if (status == ACI_EVT_DISCONNECTED) {
+        Serial.println(F("* Disconnected or advertising timed out"));
+    }
+    // OK set the last status change to this one
+    laststatus = status;
+  }
+
+  if (status == ACI_EVT_CONNECTED) {
+    // Lets see if there's any data for us!
+    if (BTLEserial.available()) {
+      Serial.print("* "); Serial.print(BTLEserial.available()); Serial.println(F(" bytes available from BTLE"));
+    }
+    // OK while we still have something to read, get a character and print it out
+  if (BTLEserial.available()) {
+    char c = BTLEserial.read();
+     while (c != ';') // One less than the size of the array
+    {     // Read a character
+        inData[index] = c; // Store it
+        index++; // Increment where to write next
+        inData[index] = '\0'; // Null terminate the string
+        c = BTLEserial.read();
+    }
+    index = 0;
+    Serial.println(inData);
+    if (inData[0] != 'c' && inData[0] != 's' && inData[0] != 't'){
+      int num = 0;
+      if (inData[0] == '1'){
+        speed_F = 1400;
+        speed_B = 1580;
+      } else if (inData[0] == '2'){
+        speed_B = 1590;
+        speed_F = 1390;
+      } else if (inData[0] == '5'){
+        speed_B = 1610;
+        speed_F = 1370;
+      }
+
+      if (inData[1] == '0'){
+        _timeout = false;
+        _delay = false;
+      } else if (inData[1] == '1'){
+        _timeout = false;
+        _delay = true;
+      } else if (inData[1] == '2'){
+        _timeout = true;
+        _delay = false;
+      }
+
+      if (inData[2] == '1'){
+        safemode = true;
+      } else if (inData[2] == '0'){
+        safemode = false;
+      }
+
+      if (inData[3] == '1'){
+        num = 1;
+      } else if (inData[3] == '2'){
+        num = 2;
+      } else if (inData[3] == '3'){
+        num = 3;
+      } else if (inData[3] == '4'){
+        num = 4;
+      }
+
+      int i = 8;
+      int m = 4;
+      for (int j = 4; j < m + 2*num;j = j + 2){
+        if (i == 11){
+          i = 12;
+        }
+        if (inData[j] == 'f'){
+          forward = i;
+          timer[forward] = (inData[j+1] - '0') * 1000;
+        } else if (inData[j] == 'b'){
+          backward = i;
+          timer[backward] = (inData[j+1] - '0') * 1000;
+        } else if (inData[j] == 'l'){
+          left = i;
+          timer[left] = (inData[j+1] - '0') * 1000;
+        } else if (inData[j] == 'r'){
+          right = i;
+          timer[right] = (inData[j+1] - '0') * 1000;
+        }
+        inputs[i] = 1;
+        i++;
+      }
+
+      Serial.println(timer[left]);
+      Serial.println(timer[right]);
+      Serial.println(timer[forward]);
+      Serial.println(timer[backward]);
+
+      while (i < 13){
+        inputs[i] = 0;
+        i++;
+      }
+
+      int start_index = m + 2*num;
+
+      switch (inData[start_index]){
+        case '0': safemode_distance = 80; break;
+        case '1': safemode_distance = 90; break;
+        case '2': safemode_distance = 100; break;
+        case '3': safemode_distance = 110; break;
+        case '4': safemode_distance = 120; break;
+        case '5': safemode_distance = 130; break;
+        case '6': safemode_distance = 140; break;
+        case '7': safemode_distance = 150; break;
+        default: safemode_distance = 80; break;
+      }
+        
+  } else if (inData[0] == 'c') {
+      float b = ((analogRead(A8)) * (5.0 / 1023.0)/5)*100;
+
+      digitalWrite(backTrigPin, LOW);
+      delayMicroseconds(5);
+      digitalWrite(backTrigPin, HIGH);
+      delayMicroseconds(10);
+      digitalWrite(backTrigPin, LOW);
+
+      // Read the signal from the sensor: a HIGH pulse whose
+      // duration is the time (in microseconds) from the sending
+      // of the ping to the reception of its echo off of an object.
+      pinMode(backEchoPin, INPUT);
+      long duration = pulseIn(backEchoPin, HIGH);
+
+      // convert the time into a distance
+      long cm = (duration/2) / 29.1;
+
+      String motors = "00";
+      if (leftMotor.attached() && rightMotor.attached()){
+        motors = "11";
+      } else if (!leftMotor.attached() && rightMotor.attached()){
+        motors = "01";
+      } else if (!rightMotor.attached() && leftMotor.attached()){
+        motors = "10";
+      } else {
+        motors = "00";
+      }
+      String s = String(int(b)) + "|" + String(val) + "|" + String(cm) + "|" + String (forward) + "|" + String(backward) + "|" + String(left) + "|" + String(right) + "|" + motors;
+ 
+      uint8_t sendbuffer[40];
+      s.getBytes(sendbuffer, 40);
+      char sendbuffersize = min(40, s.length());
+      //char sendbuffersize = 40;
+      Serial.print(F("\n* Sending -> \"")); Serial.print((char *)sendbuffer); Serial.println("\"");
+
+      // write the data
+      BTLEserial.write(sendbuffer, sendbuffersize);
+    } else if (inData[0] == 's'){
+      start = false;
+    } else if (inData[0] == 't'){
+      start = true;
+    }
+  }
+  }
+
+
+  if (start){
     leftMotor.writeMicroseconds(1510);
     rightMotor.writeMicroseconds(1510);
 
-    //move forward
-    if (failsafe() && forward != -1 && digitalRead(forward) == LOW){
-      speed = forward_speed[speed_profile][0];
-
-      //slowly accelarating
-      while (digitalRead(forward) == LOW){
-        if (speed >= forward_speed[speed_profile][1]){
-          speed = forward_speed[speed_profile][1];
-        }
-        leftMotor.writeMicroseconds(speed+2);
-        rightMotor.writeMicroseconds(speed);
-        speed = speed + 0.0005;
-
-        proportial_light(speed, forward_speed[speed_profile][1] - forward_speed[speed_profile][0], 0)
+  if (digitalRead(backward) == LOW && inputs[backward] == 1){
+    if (_delay){
+      timer_start = millis();
+      timer_end = millis();
+      while ( (timer_end - timer_start) < timer[backward]){
+        timer_end = millis();
       }
 
-      //slow decelerating
-      while (speed > 1525){
-        leftMotor.writeMicroseconds(speed);
-        rightMotor.writeMicroseconds(speed);
-        speed = speed - 0.005;
-      }
-
-      reset_tail_light();
-    }
-
-    //move backward
-    if (failsafe() && backward != -1 && digitalRead(backward) == LOW){
-      speed = backward_speed[speed_profile][0];
-
+       speed = 0;
+      //accelerate
       while (digitalRead(backward) == LOW && !stop){
-        if (speed <= backward_speed[speed_profile][1]){
-          speed = backward_speed[speed_profile][1];
+        if (speed >= 1023){
+          speed = 1023;
         }
-        leftMotor.writeMicroseconds(speed);
-        rightMotor.writeMicroseconds(speed);
-        speed = speed - 0.0005;
-        proportial_light(speed, backward_speed[speed_profile][0] - backward_speed[speed_profile][1], 1)
+        int right_speed = map (speed,0,1023,1480,speed_B);
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speed = speed + 0.25;
       }
 
-      while (speed < 1475){
-        leftMotor.writeMicroseconds(speed);
-        rightMotor.writeMicroseconds(speed);
-        speed = speed + 0.001;
+      int decel_speed = map (speed,0,1023,1480,speed_B);
+      //decelerate
+      while (decel_speed > 1500){
+        leftMotor.writeMicroseconds(decel_speed);
+        rightMotor.writeMicroseconds(decel_speed);
+        speed = speed - 5;
+        decel_speed = map (speed,0,1023,1480,speed_B);
+        Serial.println(decel_speed);
       }
-
-      reset_tail_light();
-    }
-
-    //move left
-    if (failsafe() && left != -1 && digitalRead(right) == LOW){
-      float speedL = forward_speed[speed_profile][0];
-      float speedR = backward_speed[speed_profile][0];
-
-      while (digitalRead(right) == LOW && !stop){
-        if (speedL >= forward_speed[speed_profile][1]){
-          speedL = forward_speed[speed_profile][1];
-        }
-
-        if (speedR <= backward_speed[speed_profile][1]){
-          speedR = backward_speed[speed_profile][1];
-        }
-
-        leftMotor.writeMicroseconds(speedL);
-        rightMotor.writeMicroseconds(speedR);
-        speedL = speedL + 0.002;
-        speedR = speedR - 0.002;
-        proportial_light(speedL, forward_speed[speed_profile][1] - forward_speed[speed_profile][0], 0)
-      }
-
-      while (speedL > 1525 && speedR < 1475){
-        leftMotor.writeMicroseconds(speedL);
-        rightMotor.writeMicroseconds(speedR);
-        speedL = speedL - 0.001;
-        speedR = speedR + 0.001;
-      }
-
-      reset_tail_light();
-    }
-
-    //move right
-    if (failsafe() && right != -1 && digitalRead(left) == LOW){
-      float speedL = backward_speed[speed_profile][0];
-      float speedR = forward_speed[speed_profile][0];
-
-      while (digitalRead(right) == LOW && !stop){
-        if (speedR >= forward_speed[speed_profile][1]){
-          speedR = forward_speed[speed_profile][1];
-        }
-
-        if (speedL <= backward_speed[speed_profile][1]){
-          speedL = backward_speed[speed_profile][1];
-        }
-
-        leftMotor.writeMicroseconds(speedL);
-        rightMotor.writeMicroseconds(speedR);
-        speedR = speedR + 0.002;
-        speedL = speedL - 0.002;
-
-        proportial_light(speedL, backward_speed[speed_profile][0] - backward_speed[speed_profile][1], 1)
-      }
-
-      while (speedR > 1525 && speedL < 1475){
-        leftMotor.writeMicroseconds(speedL);
-        rightMotor.writeMicroseconds(speedR);
-        speedR = speedR - 0.001;
-        speedL = speedL + 0.001;
-      }
-
-      reset_tail_light();
-    }
-  }
-}
-
-boolean failsafe(){
-  if (leftMotor.read() == 0){
-    Serial.write("Not Ready");
-    return false;
-  }
-
-  if (rightMotor.read() == 0){
-    Serial.write("Not Ready");
-    return false;
-  }
-
-  if (digitalRead(firstPresent) == HIGH || digitalRead(secondPresent) == HIGH
-   || digitalRead(thirdPresent) == HIGH || digitalRead(fourthPresent) == LOW){
-     Serial.write("Not Ready");
-     return false;
-   }
-
-   Serial.write("Ready");
-   return true;
-}
-
-//Read from serial and setup
-void setup_stage(){
-  if (Serial.avialable() > 0){
-    String message = Serial.readString();
-
-    String v = message;
-    int count = 1;
-
-    while (v.indexOf("|") != -1){
-      if (count == 1){
-        number_of_inputs = int(v.substring(0,v.indexOf("|")));
-      } else if (count == 2){
-        speed_profile =  int(v.substring(0,v.indexOf("|")));
-        if (speed_profile == 1){
-          speed_profile = 0;
-        } else if (speed_profile == 2){
-          speed_profile = 1;
-        } else{
-          speed_profile = 2;
-        }
-        speed_light(speed_profile);
-      } else if (count == 3){
-        r =  int(v.substring(0,v.indexOf("|")));
-        if (r == "On"){
-          safemode = true;
-        } else {
-          safemode = false;
-        }
-      } else if (count == 4){
-        String a = v.substring(0,v.indexOf("|"));
-        for (int i = 0; i < number_of_inputs; i++){
-          if (a.charAt(i) == 'F'){
-            forward = input_list[i];
-          }else if (a.charAt(i) == "B"){
-            backward = input_list[i];
-          } else if (a.charAt(i) == "L"){
-            left = input_list[i];
-          } else if (a.charAt(i) == "R"){
-            right = input_list[i];
+    } else if (_timeout){
+        speed = 0;
+        //accelerate
+        timer_start = millis();
+        timer_end = millis();
+        while (digitalRead(backward) == LOW && !stop && (timer_end - timer_start) < timer[backward]){
+          if (speed >= 1023){
+            speed = 1023;
           }
+          int right_speed = map (speed,0,1023,1480,speed_B);
+          leftMotor.writeMicroseconds(right_speed);
+          rightMotor.writeMicroseconds(right_speed);
+          speed = speed + 0.25;
+          timer_end = millis();
         }
+
+        int decel_speed = map (speed,0,1023,1480,speed_B);
+        //decelerate
+        while (decel_speed > 1500){
+          leftMotor.writeMicroseconds(decel_speed);
+          rightMotor.writeMicroseconds(decel_speed);
+          speed = speed - 5;
+          decel_speed = map (speed,0,1023,1480,speed_B);
+          Serial.println(decel_speed);
+        }
+
+        while (digitalRead(backward) == LOW);
+    } else {
+         speed = 0;
+        //accelerate
+        while (digitalRead(backward) == LOW && !stop){
+          if (speed >= 1023){
+            speed = 1023;
+          }
+          int right_speed = map (speed,0,1023,1480,speed_B);
+          leftMotor.writeMicroseconds(right_speed);
+          rightMotor.writeMicroseconds(right_speed);
+          speed = speed + 0.25;
+          timer_end = millis();
+        }
+
+        int decel_speed = map (speed,0,1023,1480,speed_B);
+        //decelerate
+        while (decel_speed > 1500){
+          leftMotor.writeMicroseconds(decel_speed);
+          rightMotor.writeMicroseconds(decel_speed);
+          speed = speed - 5;
+          decel_speed = map (speed,0,1023,1480,speed_B);
+          Serial.println(decel_speed);
+        }
+    }
+  }
+
+  if (digitalRead(forward) == LOW && inputs[forward] == 1){
+
+    if (_delay){
+      Serial.println("In here");
+      timer_start = millis();
+      timer_end = millis();
+      while ( (timer_end - timer_start) < timer[forward]){
+        timer_end = millis();
+      }
+
+      Serial.println("Got out");
+
+      speed = 1023;
+
+      while (digitalRead(forward) == LOW && !stop){
+        if (speed <= 0){
+          speed = 0;
+        }
+        int right_speed = map (speed,1023,0,1410,speed_F);
+        Serial.println(right_speed);
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speed = speed - 3;
+      }
+
+      int decel_speed = map (speed,1023,0,1510,speed_F);
+      //decelerate
+      while (decel_speed < 1510){
+        leftMotor.writeMicroseconds(decel_speed);
+        rightMotor.writeMicroseconds(decel_speed);
+        speed = speed + 3;
+        decel_speed = map (speed,1023,0,1510,speed_F);
+        Serial.println(decel_speed);
+      }
+    } else if (_timeout){
+      speed = 1023;
+      timer_start = millis();
+      timer_end = millis();
+      while (digitalRead(forward) == LOW && !stop && (timer_end - timer_start) < timer[forward]){
+        if (speed <= 0){
+          speed = 0;
+        }
+        int right_speed = map (speed,1023,0,1410,speed_F);
+        Serial.println(right_speed);
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speed = speed - 3;
+        timer_end = millis();
+      }
+
+      int decel_speed = map (speed,1023,0,1510,speed_F);
+      //decelerate
+      while (decel_speed < 1510){
+        leftMotor.writeMicroseconds(decel_speed);
+        rightMotor.writeMicroseconds(decel_speed);
+        speed = speed + 3;
+        decel_speed = map (speed,1023,0,1510,speed_F);
+        Serial.println(decel_speed);
+      }
+
+      while(digitalRead(forward) == LOW);
+    } else {
+      speed = 1023;
+
+      while (digitalRead(forward) == LOW && !stop){
+
+        if (speed <= 0){
+          speed = 0;
+        }
+        int right_speed = map (speed,1023,0,1410,speed_F);
+        Serial.println(right_speed);
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speed = speed - 3;
+      }
+
+      int decel_speed = map (speed,1023,0,1510,speed_F);
+      //decelerate
+      while (decel_speed < 1510){
+        leftMotor.writeMicroseconds(decel_speed);
+        rightMotor.writeMicroseconds(decel_speed);
+        speed = speed + 3;
+        decel_speed = map (speed,1023,0,1510,speed_F);
+        Serial.println(decel_speed);
       }
     }
   }
+
+  if (digitalRead(right) == LOW && inputs[right] == 1){
+
+
+    if (_delay){
+      timer_start = millis();
+      timer_end = millis();
+      while ( (timer_end - timer_start) < timer[right]){
+        timer_end = millis();
+      }
+
+            float speedL = 1023;
+      float speedR = 0;
+
+      while (digitalRead(right) == LOW && !stop){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 5;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+    } else if (_timeout){
+      float speedL = 1023;
+      float speedR = 0;
+      timer_start = millis();
+      timer_end = millis();
+      while (digitalRead(right) == LOW && !stop && (timer_end - timer_start) < timer[right]){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+        timer_end = millis();
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 2;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+
+      while(digitalRead(right) == LOW);
+    } else {
+      float speedL = 1023;
+      float speedR = 0;
+
+      while (digitalRead(right) == LOW && !stop){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(left_speed);
+        rightMotor.writeMicroseconds(right_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 5;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+    }
+  }
+
+    if (digitalRead(left) == LOW && inputs[left] == 1){
+
+    if (_delay){
+      timer_start = millis();
+      timer_end = millis();
+      while ( (timer_end - timer_start) < timer[left]){
+        timer_end = millis();
+      }
+
+            float speedL = 1023;
+      float speedR = 0;
+
+      while (digitalRead(left) == LOW && !stop){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 2;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+    } else if (_timeout){
+      float speedL = 1023;
+      float speedR = 0;
+      timer_start = millis();
+      timer_end = millis();
+      while (digitalRead(left) == LOW && !stop && (timer_end - timer_start) < timer[left]){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+        timer_end = millis();
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 2;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+
+      Serial.println("get here");
+      while(digitalRead(left) == LOW);
+    } else {
+      float speedL = 1023;
+      float speedR = 0;
+
+      while (digitalRead(left) == LOW && !stop){
+        if (speedR >= 1023){
+          speedR = 1023;
+        }
+
+        if (speedL <= 0){
+          speedL = 0;
+        }
+
+        int right_speed = map (speedR,0,1023,1480,1600);
+        int left_speed = map (speedL,1023,0,1430,1390);
+
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL - 3;
+        speedR = speedR + 0.25;
+      }
+
+      int right_speed = map (speedR,0,1023,1480,1600);
+      int left_speed = map (speedL,1023,0,1510,1390);
+      while (left_speed < 1510 || right_speed > 1500){
+        leftMotor.writeMicroseconds(right_speed);
+        rightMotor.writeMicroseconds(left_speed);
+        speedL = speedL + 3;
+        speedR = speedR - 2;
+
+        right_speed = map (speedR,0,1023,1480,1600);
+        left_speed = map (speedL,1023,0,1510,1390);
+      }
+    }
+  }
+}
 }
 
 void timerIsr(){
   trigger_pulse();
-}
-
-//incrementally light up the tail light neopixel
-void proportial_light(int currentspeed, int max, int direction){
-  int to_lit = (currentspeed/max)*NUMPIXELS_1;
-  if (direction == 0){
-      pixels_tail.setPixelColor(to_lit, pixels_tail.Color(0,150,0));
-  } else if (direction == 1){
-      pixels_tail.setPixelColor(to_lit, pixels_tail.Color(150,0,0));
-  }
-  pixels_tail.show();
-}
-
-//turn off neopixel
-void reset_tail_light(){
-  for (int i = 0; i < NUMPIXELS_1; i++){
-    pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
-  }
-  pixels_tail.show();
-}
-
-//light up speed light
-void speed_light(int speed_profile){
-  if (speed_profile == 0){
-    int color[] = {0,0,255};
-  } else if (speed_profile == 1){
-    int color[] = {0,150,0};
-  } else if (speed_profile == 2) {
-    int color[] = {238,130,238}
-  }
-  for (int i = 0; i < NUMPIXELS_2; i++){
-    pixels_speed.setPixelColor(i, pixels_speed.Color(color[0],color[1],color[2]));
-  }
-  pixels_speed.show();
-}
-
-void battery_light(int batterylevel){
-  if (batterylevel > 4.47){
-    for (int i = 0; i < NUMPIXELS_2; i++){
-      pixels_battery.setPixelColor(i, pixels_speed.Color(0,150,0));
-    }
-    pixels_battery.show();
-  } else if (batterylevel > 4.32 and batterylevel <= 4.47){
-    for (int i = 0; i < NUMPIXELS_2; i++){
-      pixels_battery.setPixelColor(i, pixels_speed.Color(255,255,0));
-    }
-    pixels_battery.show();
-  } else if (batterylevel <= 4.32){
-    for (int i = 0; i < NUMPIXELS_2; i++){
-      pixels_battery.setPixelColor(i, pixels_speed.Color(150,0,0));
-    }
-    pixels_battery.show();
-  }
-}
-
-//blink red
-void tail_blink(int state){
-  if (state == 0){
-    for (int i = 0; i < NUMPIXELS_1; i++){
-      pixels_tail.setPixelColor(i, pixels_tail.Color(0,0,0));
-    }
-    pixels_tail.show();
-    delay(500);
-  } else{
-    for (int i = 0; i < NUMPIXELS_1; i++){
-      pixels_tail.setPixelColor(i, pixels_tail.Color(150,0,0));
-    }
-    pixels_tail.show();
-    delay(500);
-  }
 }
 
 void trigger_pulse(){
@@ -399,26 +720,18 @@ void trigger_pulse(){
       digitalWrite(frontTrigPin,LOW);
       delayMicroseconds(5);
       digitalWrite(frontTrigPin, HIGH);
+      delayMicroseconds(5);
       state = 2;
       break;
     case 2:
     default:
       digitalWrite(frontTrigPin,LOW);
+      digitalWrite(backTrigPin,LOW);
       state = 0;
       break;
   }
 }
 
-//decode upcoming signal from IR sensors
-void decode(){
-  if (irr.decode(&results)){
-    if (results.value == "C573E684" && run){
-      run = false;
-    } else if (results.value == "C573E684" && !run){
-      run = true;
-    }
-  }
-}
 
 void echo_interrupt(){
   switch(digitalRead(frontEchoPin)){
@@ -429,35 +742,60 @@ void echo_interrupt(){
     case LOW:
       echo_end = micros();
       echo_duration = echo_end - echo_start;
-      if (echo_duration/58 == 0){
-        stop = true;
-        Serial.write("Not Ready");
-      }
-      if (safemode){
-        if (echo_duration/58 < 80  && echo_duration/58 != 0) {
-          //distance in cm
-          if (echo_duration/58 < 50 && echo_duration/58 != 0){
-            // distance < 50 and stop the device
+      val = echo_duration/58;
+
+      digitalWrite(backTrigPin, LOW);
+      delayMicroseconds(5);
+      digitalWrite(backTrigPin, HIGH);
+      delayMicroseconds(10);
+      digitalWrite(backTrigPin, LOW);
+
+      // Read the signal from the sensor: a HIGH pulse whose
+      // duration is the time (in microseconds) from the sending
+      // of the ping to the reception of its echo off of an object.
+      pinMode(backEchoPin, INPUT);
+      long duration = pulseIn(backEchoPin, HIGH);
+
+      // convert the time into a distance
+      long cm = (duration/2) / 29.1;
+      if (echo_duration/58 < safemode_distance || cm < safemode_distance) {
+        //distance in cm
+        if ((echo_duration/58 < 50 || cm < 50)){
+          // distance < 50 and stop the device
+          if (safemode){
             tone(buzzer,1000);
-            if (light_state == 0){
-              light_state = 1;
-              tail_blink(light_state);
-            } else{
-              light_state = 0;
-              tail_blink(light_state);
-            }
             stop = true;
-          }else{
-            // < 80 sound the alarm to alert
-            tone(buzzer,500);
+          } else{
+            noTone(buzzer);
             stop = false;
           }
+        }else if (safemode){
+          // < 80 sound the alarm to alert
+          tone(buzzer,500);
+          stop = false;
         } else{
-          //do nothing
           noTone(buzzer);
           stop = false;
         }
+      } else{
+        //do nothing
+        noTone(buzzer);
+        stop = false;
       }
       break;
+  }
+}
+
+void blink(){
+  Serial.println("in here");
+  if (digitalRead(20) == LOW){
+    if (start){
+      stop = true;
+      start = false;
+      safemode = false;
+    } else{
+      stop = false;
+      start = true;
+    }
   }
 }
